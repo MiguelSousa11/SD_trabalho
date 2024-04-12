@@ -4,29 +4,73 @@ public class Cliente
 {
 	public static void Main(string[] args)
 	{
-		string server = "127.0.0.1"; // Endereço IP do servidor
-		int port = 8888; // Porta do servidor
+		string server = args.Length > 0 ? args[0] : "127.0.0.1"; // Get server address from args or default to localhost
+		int port = 8888; // Server port
 
-		TcpClient client = new TcpClient(server, port);
-		StreamWriter writer = new StreamWriter(client.GetStream()) { AutoFlush = true };
-		StreamReader reader = new StreamReader(client.GetStream());
-
-		Console.WriteLine("Conectado ao servidor. Enviando ID...");
-		writer.WriteLine("ID 123"); // Exemplo de ID
-
-		// Loop para interação com o servidor, pode ser encerrado com "QUIT"
-		string input = "";
-		while (input.ToUpper() != "QUIT")
+		try
 		{
-			input = Console.ReadLine();
-			writer.WriteLine(input);
-			if (input.ToUpper() == "QUIT")
+			using (TcpClient client = new TcpClient(server, port))
+			using (StreamWriter writer = new StreamWriter(client.GetStream()) { AutoFlush = true })
+			using (StreamReader reader = new StreamReader(client.GetStream()))
 			{
-				Console.WriteLine(reader.ReadLine());
-				break;
+				// Wait for server's initial response
+				string serverResponse = reader.ReadLine();
+				HandleServerResponse(serverResponse); // Handle initial response
+
+				// Communication loop
+				string input = "";
+				while (input.ToUpper() != "QUIT")
+				{
+					Console.Write("> ");
+					input = Console.ReadLine();
+					writer.WriteLine(input);
+
+					serverResponse = reader.ReadLine();
+					HandleServerResponse(serverResponse); // Handle each response
+
+					if (input.ToUpper() == "QUIT")
+					{
+						break;
+					}
+				}
 			}
 		}
+		catch (Exception ex)
+		{
+			Console.WriteLine($"Erro: {ex.Message}");
+		}
+	}
 
-		client.Close();
+	private static void HandleServerResponse(string response)
+	{
+		if (!string.IsNullOrEmpty(response))
+		{
+			string[] parts = response.Split(' ');
+			string code = parts[0];
+			string message = string.Join(" ", parts, 1, parts.Length - 1);
+
+			switch (code)
+			{
+				case "200":
+					Console.WriteLine("OK: " + message);
+					break;
+
+				case "400":
+					Console.WriteLine("Erro: " + message);
+					break;
+
+				case "404":
+					Console.WriteLine("Não encontrado: " + message);
+					break;
+
+				case "500":
+					Console.WriteLine("Erro de servidor: " + message);
+					break;
+
+				default:
+					Console.WriteLine("Resposta desconhecida: " + response);
+					break;
+			}
+		}
 	}
 }
