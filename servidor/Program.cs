@@ -1,69 +1,198 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Threading;
 
-public class Servidor
+class Servidor
 {
-    private TcpListener listener;
-    private int port = 8888; // Porta de escuta
+    private static Mutex mutexClienteServicoMap = new Mutex();
+    private static Mutex mutexTarefasConcluidas = new Mutex();
+    private static Dictionary<string, string> clienteServicoMap = new Dictionary<string, string>(); // Mapeia IDs de clientes para serviços
+    private static Dictionary<string, bool> tarefasConcluidas = new Dictionary<string, bool>(); // Mapeia IDs de tarefas para seu estado de conclusão
 
-    public Servidor()
+    public static void Main()
     {
-        listener = new TcpListener(IPAddress.Any, port);
-    }
+        // Carregar informações de tarefas e alocações de clientes a partir dos arquivos CSV
+        LoadDataFromCSV();
 
-    public void Start()
-    {
+        // Definir o endereço IP e a porta para o servidor
+        string ip = "127.0.0.1";
+        int porta = 11000;
+        IPAddress enderecoIP = IPAddress.Parse(ip);
+        IPEndPoint ipEndPoint = new IPEndPoint(enderecoIP, porta);
+
+        // Inicializar o servidor e aguardar conexões
+        TcpListener listener = new TcpListener(ipEndPoint);
         listener.Start();
-        Console.WriteLine("Servidor iniciado e escutando na porta " + port);
+        Console.WriteLine("Servidor iniciado. A aguardar conexões...");
 
         while (true)
         {
+            // Aceitar cliente
             TcpClient client = listener.AcceptTcpClient();
-            Thread clientThread = new Thread(new ParameterizedThreadStart(HandleClient));
-            clientThread.Start(client);
+            Console.WriteLine("Cliente conectado.");
+
+            // Processar a comunicação com o cliente em uma nova thread
+            Thread clientThread = new Thread(() => HandleClient(client));
+            clientThread.Start();
         }
     }
 
-    private void HandleClient(object obj)
+    private static void HandleClient(TcpClient client)
     {
-        TcpClient client = (TcpClient)obj;
-        StreamReader reader = new StreamReader(client.GetStream());
-        StreamWriter writer = new StreamWriter(client.GetStream()) { AutoFlush = true };
+        // Obter stream de entrada e saída para comunicação com o cliente
+        NetworkStream stream = client.GetStream();
+        byte[] buffer = new byte[1024];
+        int bytesRead;
 
-        string message = reader.ReadLine();
-        Console.WriteLine("Recebido: " + message);
-
-        if (message.ToUpper().StartsWith("ID"))
+        try
         {
-            // Processa identificação
-            Console.WriteLine("Cliente identificado: " + message);
+            // Envio de mensagem de boas-vindas ao cliente
+            string welcomeMessage = "100 OK";
+            byte[] welcomeMessageBytes = Encoding.UTF8.GetBytes(welcomeMessage);
+            stream.Write(welcomeMessageBytes, 0, welcomeMessageBytes.Length);
+
+            // Receber ID do cliente
+            bytesRead = stream.Read(buffer, 0, buffer.Length);
+            string clientId = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+            Console.WriteLine("ID do cliente recebido: " + clientId);
+
+            // Loop para receber mensagens do cliente
+            while (true)
+            {
+                bytesRead = stream.Read(buffer, 0, buffer.Length);
+                string message = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                Console.WriteLine("Mensagem do cliente: " + message);
+                // o cliente escreve QUIT para acabar sesssao
+                if (message == "QUIT")
+                {
+                    string byeMessage = "400 BYE";
+                    byte[] byeMessageBytes = Encoding.UTF8.GetBytes(byeMessage);
+                    stream.Write(byeMessageBytes, 0, byeMessageBytes.Length);
+                    Console.WriteLine("Cliente desconectado.");
+                    break;
+                }
+                // o cliente escreve CONCLUIDA para indicar a conclusao da tarefa
+                else if (message.StartsWith("CONCLUIDA"))
+                {
+                    string taskId = message.Split(':')[1].Trim();
+                    mutexTarefasConcluidas.WaitOne();
+                    tarefasConcluidas[taskId] = true;
+                    mutexTarefasConcluidas.ReleaseMutex();
+                    string ackMessage = "Tarefa concluída: " + taskId;
+                    byte[] ackMessageBytes = Encoding.UTF8.GetBytes(ackMessage);
+                    stream.Write(ackMessageBytes, 0, ackMessageBytes.Length);
+                }
+                // o cliente escreve NOVA TAREFA para pedir uma nova tarefa
+                else if (message.StartsWith("NOVA TAREFA"))
+                {
+                    mutexClienteServicoMap.WaitOne();
+                    string service = clienteServicoMap[clientId];
+                    mutexClienteServicoMap.ReleaseMutex();
+
+                    mutexTarefasConcluidas.WaitOne();
+                    string newTask = GetNewTask(service);
+                    tarefasConcluidas[newTask] = false; // Marcar nova tarefa como não concluída
+                    mutexTarefasConcluidas.ReleaseMutex();
+
+                    string ackMessage = "Nova tarefa alocada: " + newTask;
+                    byte[] ackMessageBytes = Encoding.UTF8.GetBytes(ackMessage);
+                    stream.Write(ackMessageBytes, 0, ackMessageBytes.Length);
+                }
+            }
         }
-        else if (message.ToUpper() == "QUIT")
+        catch (Exception ex)
         {
-            // Finaliza conexão
-            writer.WriteLine("400 BYE");
+            Console.WriteLine("Erro: " + ex.Message);
+        }
+        finally
+        {
+            // Fechar a conexão com o cliente
+            stream.Close();
             client.Close();
-            Console.WriteLine("Conexão encerrada.");
-            return;
         }
-
-        // Loop para manter a comunicação, pode ser adaptado conforme necessário
-        while (message != null && !message.ToUpper().Equals("QUIT"))
-        {
-            message = reader.ReadLine();
-            Console.WriteLine("Recebido: " + message);
-        }
-
-        writer.WriteLine("400 BYE");
-        client.Close();
     }
 
-    static void Main(string[] args)
+    // Carregar informações de tarefas e alocações de clientes a partir dos arquivos CSV
+    private static void LoadDataFromCSV()
     {
-        Servidor server = new Servidor();
-        server.Start();
+        try
+        {
+            // Carregar arquivo de alocações de clientes para serviços
+            using (StreamReader reader = new StreamReader("Alocacao_Cliente_Servico.csv"))
+            {
+                while (!reader.EndOfStream)
+                {
+                    string line = reader.ReadLine();
+                    string[] parts = line.Split(',');
+                    if (parts.Length == 2)
+                    {
+                        clienteServicoMap[parts[0]] = parts[1];
+                    }
+                }
+            }
+
+            // Carregar arquivo de tarefas concluídas
+            using (StreamReader reader = new StreamReader("tarefas.csv"))
+            {
+                while (!reader.EndOfStream)
+                {
+                    string line = reader.ReadLine();
+                    string[] parts = line.Split(',');
+                    if (parts.Length == 4)
+                    {
+                        string taskId = parts[0];
+                        bool concluida = parts[2].ToLower() == "concluido";
+                        tarefasConcluidas[taskId] = concluida;
+                    }
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine("Erro ao carregar dados do CSV: " + e.Message);
+        }
+    }
+
+    // Retorna uma nova tarefa disponível para o serviço especificado
+    private static string GetNewTask(string service)
+    {
+        try
+        {
+            // Lista para armazenar as tarefas disponíveis para o serviço especificado
+            List<string> availableTasks = new List<string>();
+
+            // Percorrer o dicionário de tarefas concluídas para encontrar as tarefas ainda não concluídas
+            foreach (var taskEntry in tarefasConcluidas)
+            {
+                // Verificar se a tarefa não foi concluída e está associada ao serviço especificado
+                if (!taskEntry.Value && taskEntry.Key.StartsWith(service))
+                {
+                    availableTasks.Add(taskEntry.Key);
+                }
+            }
+
+            // Verificar se existem tarefas disponíveis para o serviço especificado
+            if (availableTasks.Count > 0)
+            {
+                // Retornar uma tarefa aleatória entre as disponíveis
+                Random random = new Random();
+                int index = random.Next(availableTasks.Count);
+                return availableTasks[index];
+            }
+            else
+            {
+                Console.WriteLine("Nenhuma tarefa disponível para o serviço: " + service);
+                return null;
+            }
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine("Erro ao selecionar nova tarefa: " + e.Message);
+            return null;
+        }
     }
 }
