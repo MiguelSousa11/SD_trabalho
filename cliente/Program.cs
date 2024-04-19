@@ -39,10 +39,10 @@ class Cliente
                     byte[] clientIdBytes = Encoding.UTF8.GetBytes(clientId);
                     stream.Write(clientIdBytes, 0, clientIdBytes.Length);
 
-                    // Loop para enviar mensagens para o servidor
+                    // Loop para enviar e receber mensagens do servidor
                     while (true)
                     {
-                        Console.Write("Escreva 'NOVA TAREFA', 'CONCLUIDA' ou 'QUIT': ");
+                        Console.Write("Escreva 'LISTAR TAREFAS', 'ESCOLHER TAREFA', 'CONCLUIDA' ou 'QUIT': ");
                         string mensagem = Console.ReadLine();
                         byte[] mensagemBytes = Encoding.UTF8.GetBytes(mensagem);
                         stream.Write(mensagemBytes, 0, mensagemBytes.Length);
@@ -51,6 +51,29 @@ class Cliente
                         if (mensagem == "QUIT")
                         {
                             break;
+                        }
+
+                        // Verificar se o cliente solicitou a lista de tarefas disponíveis
+                        if (mensagem == "LISTAR TAREFAS")
+                        {
+                            // Receber e exibir a lista de tarefas do servidor
+                            bytesRead = stream.Read(buffer, 0, buffer.Length);
+                            string taskList = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                            Console.WriteLine("Tarefas disponíveis:\n" + taskList);
+                        }
+
+                        // Verificar se o cliente escolheu uma tarefa
+                        if (mensagem.StartsWith("ESCOLHER TAREFA"))
+                        {
+                            // Enviar o ID da tarefa escolhida para o servidor
+                            string taskId = mensagem.Split(':')[1].Trim();
+                            byte[] taskIdBytes = Encoding.UTF8.GetBytes(taskId);
+                            stream.Write(taskIdBytes, 0, taskIdBytes.Length);
+
+                            // Aguardar confirmação do servidor
+                            bytesRead = stream.Read(buffer, 0, buffer.Length);
+                            string response = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                            Console.WriteLine("Servidor: " + response);
                         }
                     }
                 }
@@ -65,9 +88,9 @@ class Cliente
                 }
             }
         }
-        catch (Exception ex)
+        catch (Exception e)
         {
-            Console.WriteLine("Erro ao conectar-se ao servidor: " + ex.Message);
+            Console.WriteLine("Erro ao conectar-se ao servidor: " + e.Message);
         }
     }
 }

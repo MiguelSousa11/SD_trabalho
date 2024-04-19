@@ -66,6 +66,7 @@ class Servidor
                 bytesRead = stream.Read(buffer, 0, buffer.Length);
                 string message = Encoding.UTF8.GetString(buffer, 0, bytesRead);
                 Console.WriteLine("Mensagem do cliente: " + message);
+
                 // o cliente escreve QUIT para acabar sesssao
                 if (message == "QUIT")
                 {
@@ -82,23 +83,24 @@ class Servidor
                     mutexTarefasConcluidas.WaitOne();
                     tarefasConcluidas[taskId] = true;
                     mutexTarefasConcluidas.ReleaseMutex();
+                    UpdateTaskStatus(taskId, "Nao Alocado");
                     string ackMessage = "Tarefa concluída: " + taskId;
                     byte[] ackMessageBytes = Encoding.UTF8.GetBytes(ackMessage);
                     stream.Write(ackMessageBytes, 0, ackMessageBytes.Length);
                 }
-                // o cliente escreve NOVA TAREFA para pedir uma nova tarefa
-                else if (message.StartsWith("NOVA TAREFA"))
+                // o cliente escreve LISTAR TAREFAS para solicitar a lista de tarefas disponíveis
+                else if (message == "LISTAR TAREFAS")
                 {
-                    mutexClienteServicoMap.WaitOne();
-                    string service = clienteServicoMap[clientId];
-                    mutexClienteServicoMap.ReleaseMutex();
-
-                    mutexTarefasConcluidas.WaitOne();
-                    string newTask = GetNewTask(service);
-                    tarefasConcluidas[newTask] = false; // Marcar nova tarefa como não concluída
-                    mutexTarefasConcluidas.ReleaseMutex();
-
-                    string ackMessage = "Nova tarefa alocada: " + newTask;
+                    string taskList = GetTaskList();
+                    byte[] taskListBytes = Encoding.UTF8.GetBytes(taskList);
+                    stream.Write(taskListBytes, 0, taskListBytes.Length);
+                }
+                // o cliente escreve ESCOLHER TAREFA:ID_TAREFA para escolher uma tarefa específica
+                else if (message.StartsWith("ESCOLHER TAREFA"))
+                {
+                    string taskId = message.Split(':')[1].Trim();
+                    UpdateTaskStatus(taskId, "Em curso");
+                    string ackMessage = "Tarefa " + taskId + " escolhida e marcada como Em curso.";
                     byte[] ackMessageBytes = Encoding.UTF8.GetBytes(ackMessage);
                     stream.Write(ackMessageBytes, 0, ackMessageBytes.Length);
                 }
@@ -193,6 +195,57 @@ class Servidor
         {
             Console.WriteLine("Erro ao selecionar nova tarefa: " + e.Message);
             return null;
+        }
+    }
+
+    // Retorna a lista de tarefas disponíveis
+    private static string GetTaskList()
+    {
+        StringBuilder taskListBuilder = new StringBuilder();
+        foreach (var taskEntry in tarefasConcluidas)
+        {
+            if (!taskEntry.Value)
+            {
+                taskListBuilder.AppendLine(taskEntry.Key);
+            }
+        }
+        return taskListBuilder.ToString();
+    }
+
+    // Atualiza o estado da tarefa para o novo estado especificado no arquivo CSV
+    private static void UpdateTaskStatus(string taskId, string newStatus)
+    {
+        try
+        {
+            string filePath = "tarefas.csv";
+            List<string> lines = new List<string>();
+            using (StreamReader reader = new StreamReader(filePath))
+            {
+                while (!reader.EndOfStream)
+                {
+                    string line = reader.ReadLine();
+                    string[] parts = line.Split(',');
+                    if (parts.Length == 4 && parts[0] == taskId)
+                    {
+                        parts[2] = newStatus; // Atualizar o estado da tarefa
+                        line = string.Join(",", parts);
+                    }
+                    lines.Add(line);
+                }
+            }
+
+            // Escrever as linhas atualizadas de volta ao arquivo
+            using (StreamWriter writer = new StreamWriter(filePath))
+            {
+                foreach (string line in lines)
+                {
+                    writer.WriteLine(line);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine("Erro ao atualizar o estado da tarefa: " + e.Message);
         }
     }
 }
